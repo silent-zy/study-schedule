@@ -1,0 +1,55 @@
+# 部署步骤（一步一步照做）
+
+你已经建好私有仓库了。下面把网站推上去并开启访问。
+
+## 第 0 步：准备 4 个文件
+本机目录 `D:\workbuddyspace\Claw\study-schedule\` 里已有：
+- `index.html`
+- `style.css`
+- `app.js`
+- `schedule.json`（从你的总课表导出的初始数据）
+
+把这四个文件复制到桌面一个临时文件夹，方便下一步上传。
+
+## 第 1 步：生成 GitHub Token（只需一次）
+1. 打开 https://github.com/settings/tokens
+2. 点 **Generate new token** → 选 **Fine-grained token**（或 Classic 也行）。
+3. 权限：能读写你那个仓库即可（Fine-grained 里选你的仓库，勾 **Contents: Read and write**；Classic 勾 `repo`）。
+4. 生成后**立刻复制**那一长串 `github_pat_...` 或 `ghp_...`，它只显示一次。
+
+## 第 2 步：把 4 个文件传进仓库
+1. 打开你的仓库页面。
+2. 点 **Add file** → **Upload files**。
+3. 把那 4 个文件拖进去，写提交说明（如 `init site`），点 **Commit changes**。
+   （如果仓库里已有 README 之类，不影响，只要这 4 个文件在根目录就行。）
+
+## 第 3 步：开启 GitHub Pages（拿到公开网址）
+1. 仓库里点 **Settings** → 左侧 **Pages**。
+2. **Build and deployment** → Source 选 **Deploy from a branch**。
+3. Branch 选 **main** / **root** → 点 **Save**。
+4. 等 1 分钟左右，页面会显示类似：
+   `Your site is published at https://<你的用户名>.github.io/<仓库名>/`
+   这就是你手机和电脑都能打开的网址。
+
+## 第 4 步：打开网站并填同步设置
+1. 浏览器打开上面的网址。
+2. 点右上角 **⚙ 设置**，填：
+   - 仓库所有者：你的 GitHub 用户名
+   - 仓库名：你的仓库名
+   - 分支：`main`
+   - 数据文件路径：`schedule.json`
+   - GitHub Token：第 1 步复制的那串
+3. 点 **保存设置** → 网站会加载你的课表。
+
+## 日常怎么用
+- **换月份**：顶部下拉框选年份月份。
+- **改内容 / 标状态**：点任意格子 → 输入文字、选状态（默认白 / 已完成绿 / 未完成红 / 进行中黄 / 已取消划线黑）→ 保存。保存会立刻写回仓库。
+- **手机和电脑同步**：两端都用同一个网址、填同一套设置即可。在 A 设备改完，B 设备点 **↻ 刷新** 就能看到。
+- **时间段会自动变**：6–8 月是下午+晚上两段，8 月底–9 月是中午+晚上，10 月后是早中下晚四段，网站按当月自动显示。
+
+## 隐私说明（重要）
+当前用单分支 `main` 同时放网站和数据，所以 `schedule.json` 经 Pages 是**公开可读**的（只是网址难猜，且不含密码）。
+如果你介意，告诉我，我可以改成：网站放 `gh-pages` 分支（公开），数据只留 `main` 私有（只能靠 Token 读），数据就不公开了。
+
+## 想让我代推？
+如果你不想自己上传，把 Token 发我（仅本次使用），我可以用 GitHub API 直接把 4 个文件传上去并配置好，你只要去第 3 步开 Pages 就行。

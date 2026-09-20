@@ -8,6 +8,14 @@ const STATUS = [
   { key: 'doing',     label: '进行中', badge: '▶' },
   { key: 'cancelled', label: '已取消', badge: '⊘' },
 ];
+/* 长按 / 右键菜单里的状态（“默认”不做按钮，“清除标记”即取消状态） */
+const MENU_STATUS = [
+  { key: 'done',      label: '已完成' },
+  { key: 'undone',    label: '未完成' },
+  { key: 'doing',     label: '进行中' },
+  { key: 'cancelled', label: '已取消' },
+  { key: 'none',      label: '清除标记' },
+];
 const WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const MONTHS = [
   { y: 2026, m: 6 }, { y: 2026, m: 7 }, { y: 2026, m: 8 },
@@ -20,6 +28,8 @@ const EXAM_DATE = new Date(2026, 11, 5); // 2026-12-05
 const LS_CFG = 'ss_config';
 const LS_CACHE = 'ss_cache';
 const DEFAULT_MONTH = { y: 2026, m: 9 };
+const LONG_PRESS = 500;                    // 长按判定（毫秒）
+const CELL_TIP = '点击标记已完成，再点取消；长按或右键选其他状态';
 
 let state = {
   config: null,        // {owner,repo,branch,path,token}
@@ -131,7 +141,7 @@ function restoreCache() {
 
 /* ================= 保存队列：串行 + 合并 + 冲突自动重试 =================
    要点：
-   1) 所有修改都进队列，同一时刻只有一个请求在飞 —— 杜绝“连点几下互相顶掉”。
+   1) 所有修改都进队列，同一时刻只有一个请求在飞 —— 杜绝并发互相顶掉。
    2) 每次写之前重新 GET 一次，拿最新 sha 做「读-改-写」—— 不再依赖本地缓存的旧 sha。
    3) 万一仍撞上 409，重新拉取后自动重试，最多 3 次。
    4) 本地改动以补丁（patch）形式叠加到远端最新数据上，多设备也不会互相覆盖。
@@ -304,7 +314,7 @@ function renderMonth() {
         const txt = rec ? (rec.text || '') : '';
         if (txt) {
           const meta = statusMeta(st);
-          row += `<td><div class="cell st-${st}" data-date="${cell}" data-ts="${ts}" title="点击切换状态">`
+          row += `<td><div class="cell st-${st}" data-date="${cell}" data-ts="${ts}" title="${CELL_TIP}">`
                + `<span class="cell-badge">${meta.badge}</span>`
                + `<span class="cell-text">${escapeHtml(txt)}</span>`
                + `<button class="cell-edit" data-edit="1" title="修改内容">✎</button></div></td>`;
@@ -319,45 +329,129 @@ function renderMonth() {
     container.appendChild(card);
   });
 
-  container.querySelectorAll('.cell').forEach((el) => {
-    el.addEventListener('click', (ev) => {
-      const date = el.dataset.date, ts = el.dataset.ts;
-      if (ev.target.closest('[data-edit]')) {
-        ev.stopPropagation();
-        openEdit(date, ts);
-        return;
-      }
-      if (el.classList.contains('empty')) openEdit(date, ts);   // 空白格：添加内容
-      else cycleStatus(date, ts, el);                          // 有内容：一键切换状态
-    });
-  });
+  container.querySelectorAll('.cell').forEach(bindCell);
 }
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/* ---------- 状态一键切换（进队列，不阻塞点击） ---------- */
-function cycleStatus(date, ts, el) {
+/* ---------- 格子交互：单击=已完成/取消，长按（或右键）=选其他状态 ---------- */
+function bindCell(el) {
+  const date = el.dataset.date, ts = el.dataset.ts;
+
+  // 空白格：点击 = 添加内容
+  if (el.classList.contains('empty')) {
+    el.addEventListener('click', () => openEdit(date, ts));
+    return;
+  }
+
+  // ✎：改内容（不触发状态切换）
+  const editBtn = el.querySelector('[data-edit]');
+  if (editBtn) {
+    editBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openEdit(date, ts); });
+  }
+
+  let timer = null, longFired = false, sx = 0, sy = 0;
+  const cancelTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+  el.addEventListener('pointerdown', (ev) => {
+    if (ev.target.closest('[data-edit]')) return;
+    cancelTimer();
+    longFired = false;
+    sx = ev.clientX; sy = ev.clientY;
+    timer = setTimeout(() => { timer = null; longFired = true; openStatusMenu(el); }, LONG_PRESS);
+  });
+  el.addEventListener('pointerup', cancelTimer);
+  el.addEventListener('pointerleave', cancelTimer);
+  el.addEventListener('pointercancel', cancelTimer);
+  el.addEventListener('pointermove', (ev) => {
+    if (Math.abs(ev.clientX - sx) > 10 || Math.abs(ev.clientY - sy) > 10) cancelTimer();
+  });
+
+  el.addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-edit]')) return;
+    if (longFired) { longFired = false; return; }   // 这次是长按，已被菜单接管
+    toggleDone(el);
+  });
+
+  // 电脑端：右键直接出菜单
+  el.addEventListener('contextmenu', (ev) => {
+    if (ev.target.closest('[data-edit]')) return;
+    ev.preventDefault();
+    cancelTimer();
+    openStatusMenu(el);
+  });
+}
+
+/* 单击：已完成 ↔ 取消 */
+function toggleDone(el) {
+  const date = el.dataset.date, ts = el.dataset.ts;
   const rec = getRec(date, ts);
   if (!rec) return;
-  const i = STATUS.findIndex((s) => s.key === (rec.status || 'none'));
-  const next = STATUS[(i + 1) % STATUS.length].key;
-  rec.status = next;
+  const cur = rec.status || 'none';
+  setStatus(date, ts, cur === 'done' ? 'none' : 'done', el);
+}
+
+/* 设定状态（本地先变，改动进队列异步同步） */
+function setStatus(date, ts, status, el) {
+  const rec = getRec(date, ts);
+  if (!rec) return;
+  rec.status = status;
   if (!state.data.days[date]) state.data.days[date] = {};
   state.data.days[date][ts] = rec;
-  // 即时更新该格
   el.classList.remove('st-none', 'st-done', 'st-undone', 'st-doing', 'st-cancelled');
-  el.classList.add('st-' + next);
+  el.classList.add('st-' + status);
   const badge = el.querySelector('.cell-badge');
-  if (badge) badge.textContent = statusMeta(next).badge;
+  if (badge) badge.textContent = statusMeta(status).badge;
   el.classList.remove('just'); void el.offsetWidth; el.classList.add('just');
-  // 快照进队列（务必复制，不能传引用）
-  enqueue({ date, ts, value: { text: rec.text || '', status: next } })
+  enqueue({ date, ts, value: { text: rec.text || '', status } })
     .catch((e) => toast('同步失败：' + friendly(e)));
+}
+
+/* ---------- 状态选择菜单 ---------- */
+let menuCell = null;
+function openStatusMenu(el) {
+  closeStatusMenu();
+  const date = el.dataset.date, ts = el.dataset.ts;
+  const cur = (getRec(date, ts) || {}).status || 'none';
+  const box = $('statusMenu');
+  box.innerHTML = `<div class="sm-title">${date} ${ts}</div>` + MENU_STATUS.map((s) =>
+    `<button class="sm-btn sm-${s.key}${cur === s.key ? ' active' : ''}" data-key="${s.key}">${s.label}${cur === s.key ? '  ✓' : ''}</button>`
+  ).join('');
+  box.classList.remove('hidden');
+  $('statusBackdrop').classList.remove('hidden');
+  // 贴着格子定位，超出视口则翻转/夹紧
+  const r = el.getBoundingClientRect();
+  const bw = box.offsetWidth, bh = box.offsetHeight;
+  const left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - bw - 8));
+  let top = r.bottom + 6;
+  if (top + bh > window.innerHeight - 8) top = Math.max(8, r.top - bh - 6);
+  box.style.left = left + 'px';
+  box.style.top = top + 'px';
+  box.querySelectorAll('.sm-btn').forEach((b) => {
+    b.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      setStatus(date, ts, b.dataset.key, el);
+      closeStatusMenu();
+    });
+  });
+  menuCell = el;
+  window.addEventListener('scroll', closeStatusMenu, { passive: true });
+  window.addEventListener('resize', closeStatusMenu);
+}
+function closeStatusMenu() {
+  const box = $('statusMenu');
+  if (!box || box.classList.contains('hidden')) return;
+  box.classList.add('hidden');
+  $('statusBackdrop').classList.add('hidden');
+  menuCell = null;
+  window.removeEventListener('scroll', closeStatusMenu);
+  window.removeEventListener('resize', closeStatusMenu);
 }
 
 /* ---------- 内容编辑 ---------- */
 function openEdit(date, ts) {
+  closeStatusMenu();
   state.editing = { date, ts };
   const rec = getRec(date, ts);
   $('editTitle').textContent = `${date}  ${ts}`;
@@ -454,6 +548,8 @@ $('btnCfgSave').addEventListener('click', saveSettings);
 $('btnEditCancel').addEventListener('click', closeEdit);
 $('btnEditSave').addEventListener('click', saveEdit);
 $('btnEditDelete').addEventListener('click', deleteEdit);
+$('statusBackdrop').addEventListener('click', closeStatusMenu);
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeStatusMenu(); });
 
 /* 切回本页时自动同步一次（多设备场景：手机改完，切回电脑自动刷新） */
 document.addEventListener('visibilitychange', () => {

@@ -129,6 +129,7 @@ td.ts{
   position:relative; min-height:56px; padding:9px 9px 9px 12px; font-size:13px;
   line-height:1.45; cursor:pointer; word-break:break-word; white-space:pre-wrap;
   transition:background .15s, box-shadow .15s; border-left:3px solid transparent;
+  -webkit-user-select:none; user-select:none;
 }
 .cell:hover{background:rgba(255,255,255,.035);}
 .cell:active{background:rgba(255,255,255,.07);}
@@ -199,6 +200,32 @@ td.ts{
 }
 .modal-card input:focus,.modal-card textarea:focus{outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(79,140,255,.18);}
 .modal-actions{display:flex; gap:8px; justify-content:flex-end; margin-top:8px;}
+
+/* ---------- 状态选择菜单（长按 / 右键触发） ---------- */
+.sm-backdrop{position:fixed; inset:0; z-index:70; background:transparent;}
+.sm-backdrop.hidden{display:none;}
+.status-menu{
+  position:fixed; z-index:71; min-width:190px; padding:10px;
+  background:linear-gradient(180deg,var(--card2),var(--card));
+  border:1px solid var(--line2); border-radius:14px;
+  box-shadow:0 16px 44px rgba(0,0,0,.62);
+}
+.status-menu.hidden{display:none;}
+.sm-title{font-size:12px; color:var(--muted); margin:2px 4px 9px; white-space:nowrap;}
+.sm-btn{
+  display:block; width:100%; text-align:left; padding:11px 12px; margin-bottom:6px;
+  border:1px solid var(--line2); border-left:3px solid transparent; border-radius:9px;
+  background:var(--card); color:var(--text); font-size:14px; font-family:inherit; cursor:pointer;
+  transition:border-color .15s, filter .15s;
+}
+.sm-btn:last-child{margin-bottom:0;}
+.sm-btn:hover{border-color:var(--primary);}
+.sm-btn.active{border-color:var(--primary); box-shadow:0 0 0 2px rgba(79,140,255,.18);}
+.sm-btn.sm-done{border-left-color:var(--done);}
+.sm-btn.sm-undone{border-left-color:var(--undone);}
+.sm-btn.sm-doing{border-left-color:var(--doing);}
+.sm-btn.sm-cancelled{border-left-color:var(--cancel);}
+.sm-btn.sm-none{border-left-color:var(--line2); color:var(--muted);}
 
 /* ---------- Toast ---------- */
 .toast{

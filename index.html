@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="theme-color" content="#0b0f19" />
 <title>我的课程表</title>
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -10,20 +11,42 @@
 <header class="topbar">
   <div class="title">📅 我的课程表</div>
   <div class="controls">
-    <select id="monthSel" aria-label="选择月份"></select>
-    <button id="btnRefresh" class="btn">↻ 刷新</button>
+    <span class="sync-dot" id="syncDot" title="同步状态"></span>
+    <button id="btnRefresh" class="btn ghost">↻ 刷新</button>
     <button id="btnSettings" class="btn ghost">⚙ 设置</button>
   </div>
 </header>
 
+<!-- 省考倒计时 -->
+<section class="countdown" id="countdown">
+  <div class="cd-left">
+    <div class="cd-label">距江苏省考笔试</div>
+    <div class="cd-date" id="cdDate">2026 年 12 月 05 日</div>
+  </div>
+  <div class="cd-right">
+    <span class="cd-num" id="cdNum">--</span>
+    <span class="cd-unit">天</span>
+  </div>
+</section>
+
+<!-- 月份标签 -->
+<nav class="month-tabs" id="monthTabs" aria-label="选择月份"></nav>
+
 <main id="weeks" class="weeks"></main>
 
 <div class="legend">
-  <span class="lg st-none">默认</span>
-  <span class="lg st-done">已完成</span>
-  <span class="lg st-undone">未完成</span>
-  <span class="lg st-doing">进行中</span>
-  <span class="lg st-cancelled">已取消</span>
+  <div class="hint-row">
+    <span>点空白格 → 添加内容</span>
+    <span>点有内容的格 → 切换状态</span>
+    <span>点 <b>✎</b> → 修改内容</span>
+  </div>
+  <div class="color-row">
+    <span class="lg st-none">默认</span>
+    <span class="lg st-done">已完成</span>
+    <span class="lg st-undone">未完成</span>
+    <span class="lg st-doing">进行中</span>
+    <span class="lg st-cancelled">已取消</span>
+  </div>
 </div>
 
 <!-- 设置弹窗 -->
@@ -43,12 +66,11 @@
   </div>
 </div>
 
-<!-- 编辑弹窗 -->
+<!-- 内容编辑弹窗 -->
 <div id="editModal" class="modal hidden">
   <div class="modal-card">
-    <h3 id="editTitle">编辑</h3>
+    <h3 id="editTitle">修改内容</h3>
     <label>内容<textarea id="editText" rows="4" placeholder="这一时间段的任务 / 课程"></textarea></label>
-    <div class="status-row" id="editStatus"></div>
     <div class="modal-actions">
       <button id="btnEditDelete" class="btn danger">清空</button>
       <button id="btnEditCancel" class="btn ghost">取消</button>

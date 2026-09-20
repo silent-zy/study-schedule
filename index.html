@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>我的课程表</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="title">📅 我的课程表</div>
+  <div class="controls">
+    <select id="monthSel" aria-label="选择月份"></select>
+    <button id="btnRefresh" class="btn">↻ 刷新</button>
+    <button id="btnSettings" class="btn ghost">⚙ 设置</button>
+  </div>
+</header>
+
+<main id="weeks" class="weeks"></main>
+
+<div class="legend">
+  <span class="lg st-none">默认</span>
+  <span class="lg st-done">已完成</span>
+  <span class="lg st-undone">未完成</span>
+  <span class="lg st-doing">进行中</span>
+  <span class="lg st-cancelled">已取消</span>
+</div>
+
+<!-- 设置弹窗 -->
+<div id="settingsModal" class="modal hidden">
+  <div class="modal-card">
+    <h3>同步设置</h3>
+    <p class="hint">把数据存到你的 GitHub 私有仓库，手机和电脑就能同步。只需填一次（存在本机浏览器）。</p>
+    <label>仓库所有者(用户名) <input id="cfgOwner" placeholder="如 xiaoming" /></label>
+    <label>仓库名 <input id="cfgRepo" placeholder="如 study-schedule" /></label>
+    <label>分支 <input id="cfgBranch" placeholder="main" value="main" /></label>
+    <label>数据文件路径 <input id="cfgPath" placeholder="schedule.json" value="schedule.json" /></label>
+    <label>GitHub Token（需 repo 权限）<input id="cfgToken" type="password" placeholder="ghp_..." /></label>
+    <div class="modal-actions">
+      <button id="btnCfgCancel" class="btn ghost">取消</button>
+      <button id="btnCfgSave" class="btn">保存设置</button>
+    </div>
+  </div>
+</div>
+
+<!-- 编辑弹窗 -->
+<div id="editModal" class="modal hidden">
+  <div class="modal-card">
+    <h3 id="editTitle">编辑</h3>
+    <label>内容<textarea id="editText" rows="4" placeholder="这一时间段的任务 / 课程"></textarea></label>
+    <div class="status-row" id="editStatus"></div>
+    <div class="modal-actions">
+      <button id="btnEditDelete" class="btn danger">清空</button>
+      <button id="btnEditCancel" class="btn ghost">取消</button>
+      <button id="btnEditSave" class="btn">保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

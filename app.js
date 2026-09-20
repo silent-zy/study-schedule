@@ -33,11 +33,21 @@ let state = {
 const $ = (id) => document.getElementById(id);
 function toast(msg) {
   const t = $('toast'); t.textContent = msg; t.classList.remove('hidden');
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), 2200);
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), 2600);
 }
 function syncDot(cls) {
   const d = $('syncDot'); if (!d) return;
   d.className = 'sync-dot' + (cls ? ' ' + cls : '');
+}
+/* 把 HTTP 状态码翻译成看得懂的话 */
+function friendly(err) {
+  const s = err && err.status;
+  if (s === 401) return 'Token 无效，请到「设置」重新填写';
+  if (s === 403) return 'Token 权限不足（需 Contents 读写）或已限流';
+  if (s === 404) return '找不到仓库或文件路径，请检查「设置」';
+  if (s === 409) return '数据冲突（已自动重试）';
+  if (s === 422) return '文件路径或参数有误';
+  return (err && err.message) || '同步失败';
 }
 function loadConfig() {
   try { state.config = JSON.parse(localStorage.getItem(LS_CFG)) || null; } catch { state.config = null; }
@@ -73,9 +83,9 @@ function renderCountdown() {
 async function ghGet(path) {
   const { owner, repo, branch, token } = state.config;
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}?ref=${encodeURIComponent(branch)}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } });
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }, cache: 'no-store' });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error('读取失败 ' + res.status);
+  if (!res.ok) { const e = new Error('读取失败 ' + res.status); e.status = res.status; throw e; }
   const j = await res.json();
   return { content: base64ToUtf8(j.content), sha: j.sha };
 }
@@ -89,37 +99,26 @@ async function ghPut(path, content, sha, message) {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    if (res.status === 409) throw new Error('数据已过期，请先刷新再试');
-    throw new Error('保存失败 ' + res.status);
-  }
+  if (!res.ok) { const e = new Error('保存失败 ' + res.status); e.status = res.status; throw e; }
   const j = await res.json();
   return j.content.sha;
 }
 
-/* ---------- 数据加载 / 保存 ---------- */
+/* ---------- 数据加载 / 缓存 ---------- */
 async function loadData() {
   if (state.config && state.config.token) {
-    try {
-      const r = await ghGet(state.config.path);
-      if (r) {
-        state.data = JSON.parse(r.content);
-        state.sha = r.sha;
-        cacheData();
-        return;
-      }
-    } catch (e) { console.warn(e); }
+    const r = await ghGet(state.config.path);   // 失败会抛出，交由上层提示
+    if (r) {
+      state.data = JSON.parse(r.content);
+      state.sha = r.sha;
+      cacheData();
+      return;
+    }
   }
   const res = await fetch('./' + (state.config ? state.config.path : 'schedule.json'), { cache: 'no-store' });
-  if (res.ok) {
-    state.data = await res.json();
-    if (state.config && state.config.token) {
-      try { const r = await ghGet(state.config.path); if (r) state.sha = r.sha; } catch {}
-    }
-    cacheData();
-    return;
-  }
-  throw new Error('无法加载数据，请检查设置或先部署 schedule.json');
+  if (!res.ok) throw new Error('无法加载数据，请检查设置或先部署 schedule.json');
+  state.data = await res.json();
+  cacheData();
 }
 function cacheData() { localStorage.setItem(LS_CACHE, JSON.stringify({ data: state.data, sha: state.sha })); }
 function restoreCache() {
@@ -129,32 +128,108 @@ function restoreCache() {
   } catch {}
   return false;
 }
-async function saveData(silent) {
-  if (!state.config || !state.config.token) {
-    if (!silent) { toast('请先到「设置」填写 GitHub Token'); openSettings(); }
-    syncDot('err');
-    return;
-  }
-  state.data.updatedAt = new Date().toISOString();
-  const content = JSON.stringify(state.data, null, 2);
-  syncDot('busy');
-  try {
-    state.sha = await ghPut(state.config.path, content, state.sha, 'update schedule ' + new Date().toLocaleString('zh-CN'));
-    cacheData();
-    syncDot('ok');
-    if (!silent) toast('已保存 ✓');
-  } catch (e) {
-    syncDot('err');
-    toast(e.message || '保存失败');
+
+/* ================= 保存队列：串行 + 合并 + 冲突自动重试 =================
+   要点：
+   1) 所有修改都进队列，同一时刻只有一个请求在飞 —— 杜绝“连点几下互相顶掉”。
+   2) 每次写之前重新 GET 一次，拿最新 sha 做「读-改-写」—— 不再依赖本地缓存的旧 sha。
+   3) 万一仍撞上 409，重新拉取后自动重试，最多 3 次。
+   4) 本地改动以补丁（patch）形式叠加到远端最新数据上，多设备也不会互相覆盖。
+   ====================================================================== */
+const SAVE_DEBOUNCE = 350;
+let pendingPatch = [];      // [{date, ts, value}]  value=null 表示删除
+let running = false;
+let waiters = [];
+let debounceTimer = null;
+
+function applyPatch(data, p) {
+  const { date, ts, value } = p;
+  if (!data.days) data.days = {};
+  if (value === null) {
+    if (data.days[date]) {
+      delete data.days[date][ts];
+      if (!Object.keys(data.days[date]).length) delete data.days[date];
+    }
+  } else {
+    (data.days[date] = data.days[date] || {})[ts] = { text: value.text, status: value.status };
   }
 }
+
+function enqueue(patch) {
+  pendingPatch.push(patch);
+  const p = new Promise((res, rej) => waiters.push({ res, rej }));
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(kick, SAVE_DEBOUNCE);   // 连点合并成一次写入
+  return p;
+}
+
+function resolveWaiters(ok, err) {
+  const ws = waiters; waiters = [];
+  ws.forEach((w) => (ok ? w.res() : w.rej(err)));
+}
+
+function kick() {
+  debounceTimer = null;
+  if (running) return;
+  if (!pendingPatch.length) { resolveWaiters(true); return; }
+  running = true;
+  syncDot('busy');
+  runLoop();
+}
+
+async function runLoop() {
+  let err = null;
+  try {
+    while (pendingPatch.length) {
+      const batch = pendingPatch.splice(0, pendingPatch.length);
+      try {
+        await pushBatch(batch);
+        syncDot('ok');
+      } catch (e) {
+        pendingPatch.unshift(...batch);   // 失败：放回队列，等下次触发重试
+        throw e;
+      }
+    }
+  } catch (e) { err = e; syncDot('err'); }
+  running = false;
+  resolveWaiters(!err, err);
+}
+
+async function pushBatch(batch) {
+  if (!state.config || !state.config.token) throw new Error('请先到「设置」填写 GitHub Token');
+  const path = state.config.path;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await ghGet(path);                                  // 每次都用最新 sha
+    const remote = r ? JSON.parse(r.content) : { version: 1, updatedAt: null, days: {} };
+    batch.forEach((p) => applyPatch(remote, p));
+    remote.updatedAt = new Date().toISOString();
+    try {
+      const sha = await ghPut(path, JSON.stringify(remote, null, 2), r ? r.sha : null,
+        'update schedule ' + new Date().toLocaleString('zh-CN'));
+      state.data = remote; state.sha = sha; cacheData();
+      return;
+    } catch (e) {
+      if (e.status === 409) continue;                             // 撞车 → 重取重试
+      throw e;
+    }
+  }
+  const e = new Error('保存冲突，请稍后重试'); e.status = 409; throw e;
+}
+
+/* 等待队列清空（给“刷新/保存”用） */
+function whenIdle() {
+  if (!running && !pendingPatch.length && !debounceTimer) return Promise.resolve();
+  return new Promise((res, rej) => waiters.push({ res, rej }));
+}
+/* 立即触发一次刷写（不等 debounce） */
+function flushNow() { clearTimeout(debounceTimer); debounceTimer = null; kick(); return whenIdle(); }
 
 /* ---------- 月份标签 ---------- */
 function renderMonthTabs() {
   const nav = $('monthTabs');
   nav.innerHTML = '';
   const nowY = new Date().getFullYear(), nowM = new Date().getMonth() + 1;
-  MONTHS.forEach((mo, i) => {
+  MONTHS.forEach((mo) => {
     const b = document.createElement('button');
     b.className = 'mtab' + (mo.y === state.current.y && mo.m === state.current.m ? ' active' : '');
     const isNow = mo.y === nowY && mo.m === nowM;
@@ -179,7 +254,7 @@ function renderMonth() {
   for (let d = 1; d <= daysInMonth; d++) {
     const key = iso(y, m, d);
     monthDays.push(key);
-    const rec = state.data.days[key];
+    const rec = (state.data.days || {})[key];
     if (rec) Object.keys(rec).forEach((ts) => tsSet.add(ts));
   }
   const tsList = [...tsSet].sort((a, b) => parseTs(a) - parseTs(b));
@@ -252,11 +327,8 @@ function renderMonth() {
         openEdit(date, ts);
         return;
       }
-      if (el.classList.contains('empty')) {
-        openEdit(date, ts);       // 空白格：添加内容
-      } else {
-        cycleStatus(date, ts, el); // 有内容：一键切换状态
-      }
+      if (el.classList.contains('empty')) openEdit(date, ts);   // 空白格：添加内容
+      else cycleStatus(date, ts, el);                          // 有内容：一键切换状态
     });
   });
 }
@@ -264,7 +336,7 @@ function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/* ---------- 状态一键切换 ---------- */
+/* ---------- 状态一键切换（进队列，不阻塞点击） ---------- */
 function cycleStatus(date, ts, el) {
   const rec = getRec(date, ts);
   if (!rec) return;
@@ -279,7 +351,9 @@ function cycleStatus(date, ts, el) {
   const badge = el.querySelector('.cell-badge');
   if (badge) badge.textContent = statusMeta(next).badge;
   el.classList.remove('just'); void el.offsetWidth; el.classList.add('just');
-  saveData(true); // 静默保存
+  // 快照进队列（务必复制，不能传引用）
+  enqueue({ date, ts, value: { text: rec.text || '', status: next } })
+    .catch((e) => toast('同步失败：' + friendly(e)));
 }
 
 /* ---------- 内容编辑 ---------- */
@@ -299,15 +373,23 @@ async function saveEdit() {
   const old = getRec(date, ts);
   const keepStatus = old ? (old.status || 'none') : 'none';
   if (!state.data.days[date]) state.data.days[date] = {};
+  let value;
   if (text) {
     state.data.days[date][ts] = { text, status: keepStatus };
+    value = { text, status: keepStatus };
   } else {
     delete state.data.days[date][ts];
     if (Object.keys(state.data.days[date]).length === 0) delete state.data.days[date];
+    value = null;
   }
   closeEdit();
   renderMonth();
-  await saveData(false);
+  try {
+    await flushNow();                                   // 内容修改：等真正写回再提示
+    toast('已保存 ✓');
+  } catch (e) {
+    toast('保存失败：' + friendly(e));
+  }
 }
 function deleteEdit() { $('editText').value = ''; saveEdit(); }
 
@@ -338,31 +420,51 @@ function saveSettings() {
 }
 
 /* ---------- 启动 ---------- */
+let lastSync = 0;
 async function boot(reload) {
+  // 先用缓存秒开，再拉最新（每次都刷 sha，避免用旧 sha 去写）
+  const had = restoreCache();
+  if (had) renderMonth();
+
   if (!state.config || !state.config.token) {
     try { await loadData(); renderMonth(); }
     catch (e) { toast('先到「设置」填好仓库与 Token'); openSettings(); }
     return;
   }
   try {
-    if (reload || !restoreCache()) await loadData();
+    await loadData();
     renderMonth();
     syncDot('ok');
+    lastSync = Date.now();
   } catch (e) {
-    toast(e.message || '加载失败');
-    syncDot('err');
-    openSettings();
+    if (had) { syncDot('err'); toast('离线中，先显示本地缓存（' + friendly(e) + '）'); }
+    else { syncDot('err'); toast(friendly(e)); openSettings(); }
   }
 }
 
 /* ---------- 事件绑定 ---------- */
-$('btnRefresh').addEventListener('click', async () => { await boot(true); toast('已刷新'); });
+$('btnRefresh').addEventListener('click', async () => {
+  try { await flushNow(); } catch { /* 未保存的先尝试写回 */ }
+  await boot(true);
+  toast('已刷新');
+});
 $('btnSettings').addEventListener('click', openSettings);
 $('btnCfgCancel').addEventListener('click', closeSettings);
 $('btnCfgSave').addEventListener('click', saveSettings);
 $('btnEditCancel').addEventListener('click', closeEdit);
 $('btnEditSave').addEventListener('click', saveEdit);
 $('btnEditDelete').addEventListener('click', deleteEdit);
+
+/* 切回本页时自动同步一次（多设备场景：手机改完，切回电脑自动刷新） */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!state.config || !state.config.token) return;
+  if (running || pendingPatch.length || debounceTimer) return;
+  if (Date.now() - lastSync < 5000) return;
+  loadData().then(() => { renderMonth(); syncDot('ok'); lastSync = Date.now(); }).catch(() => {});
+});
+/* 关页面前尽量把未保存的改动写回 */
+window.addEventListener('beforeunload', () => { if (pendingPatch.length) flushNow(); });
 
 loadConfig();
 renderCountdown();

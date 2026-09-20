@@ -36,9 +36,9 @@
 
 <div class="legend">
   <div class="hint-row">
-    <span>点空白格 → 添加内容</span>
-    <span>点有内容的格 → 切换状态</span>
-    <span>点 <b>✎</b> → 修改内容</span>
+    <span>点格子 → 标记 <b>已完成</b>（再点一下取消）</span>
+    <span>长按 / 右键 → 选其他状态</span>
+    <span>点 <b>✎</b> → 改内容</span>
   </div>
   <div class="color-row">
     <span class="lg st-none">默认</span>
@@ -78,6 +78,10 @@
     </div>
   </div>
 </div>
+
+<!-- 状态选择菜单（长按 / 右键格子时出现） -->
+<div id="statusMenu" class="status-menu hidden"></div>
+<div id="statusBackdrop" class="sm-backdrop hidden"></div>
 
 <div id="toast" class="toast hidden"></div>
 
